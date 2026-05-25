@@ -5,7 +5,6 @@ import json
 import uuid
 
 def conectar_sheets():
-    """Conecta a Google Sheets usando el TOML oculto en st.secrets"""
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         gc = gspread.service_account_from_dict(creds_dict)
@@ -26,10 +25,16 @@ def get_pedidos(fecha_str=None):
     sh = conectar_sheets()
     ws = sh.worksheet("pedidos")
     data = ws.get_all_records()
+    
+    # Agregamos 'entregado' a la estructura base
     if not data:
-        return pd.DataFrame(columns=["id", "cliente_nombre", "producto_id", "tamano", "cantidad", "fecha_entrega", "pagado"])
+        return pd.DataFrame(columns=["id", "cliente_nombre", "producto_id", "tamano", "cantidad", "fecha_entrega", "pagado", "entregado"])
     
     df = pd.DataFrame(data)
+    # Por si hay pedidos antiguos que no tenían esta columna
+    if 'entregado' not in df.columns:
+        df['entregado'] = 0
+        
     if fecha_str:
         df = df[df["fecha_entrega"] == str(fecha_str)]
     return df
@@ -38,12 +43,12 @@ def agregar_pedido(cliente_nombre, producto_id, tamano, cantidad, fecha_entrega)
     sh = conectar_sheets()
     ws = sh.worksheet("pedidos")
     nuevo_id = str(uuid.uuid4())[:8]
-    ws.append_row([nuevo_id, cliente_nombre, str(producto_id), tamano, cantidad, str(fecha_entrega), 0])
+    # Agregamos un segundo 0 al final para el estado de 'entregado'
+    ws.append_row([nuevo_id, cliente_nombre, str(producto_id), tamano, cantidad, str(fecha_entrega), 0, 0])
 
-# --- NUEVA FUNCIÓN: GUARDADO ULTRARRÁPIDO EN LOTE ---
-def actualizar_pagos_lote(cambios):
-    """Recibe un diccionario {id_pedido: boolean} y actualiza todo de golpe"""
-    if not cambios: return
+def actualizar_estados_lote(cambios_pagos, cambios_retiros):
+    """Actualiza la columna 7 (pagado) y la columna 8 (entregado) de golpe"""
+    if not cambios_pagos and not cambios_retiros: return
     sh = conectar_sheets()
     ws = sh.worksheet("pedidos")
     records = ws.get_all_records()
@@ -51,9 +56,10 @@ def actualizar_pagos_lote(cambios):
     celdas_a_actualizar = []
     for i, row in enumerate(records):
         pid = str(row['id'])
-        if pid in cambios:
-            # i + 2 (1 por el encabezado, 1 porque el índice de GSheets empieza en 1)
-            celdas_a_actualizar.append(gspread.Cell(row=i+2, col=7, value=int(cambios[pid])))
+        if pid in cambios_pagos:
+            celdas_a_actualizar.append(gspread.Cell(row=i+2, col=7, value=int(cambios_pagos[pid])))
+        if pid in cambios_retiros:
+            celdas_a_actualizar.append(gspread.Cell(row=i+2, col=8, value=int(cambios_retiros[pid])))
             
     if celdas_a_actualizar:
         ws.update_cells(celdas_a_actualizar)
