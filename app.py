@@ -19,7 +19,6 @@ def inyectar_css():
     @media (prefers-color-scheme: light) {{ .titulo-nuestro {{ color: #2C3E50; }} .titulo-menu {{ color: #D35400; }} }}
     @media (prefers-color-scheme: dark) {{ .titulo-nuestro {{ color: #ffffff; }} .titulo-menu {{ color: #F39C12; }} }}
     
-    /* Botones personalizados amarillos */
     button[kind="primary"] {{ background-color: #F39C12 !important; color: #000000 !important; border: 1px solid #F39C12 !important; transition: all 0.3s ease !important; }}
     button[kind="primary"]:hover {{ background-color: #D35400 !important; border-color: #D35400 !important; }}
     button[kind="secondary"] {{ background-color: transparent !important; color: #F39C12 !important; border: 1px solid #F39C12 !important; transition: all 0.3s ease !important; }}
@@ -28,19 +27,14 @@ def inyectar_css():
     """
     st.markdown(estilo, unsafe_allow_html=True)
 
-# Inicializar las variables del Wizard en la memoria de la app
-if "paso_wizard" not in st.session_state:
-    st.session_state.paso_wizard = 1
-if "nombre_cliente" not in st.session_state:
-    st.session_state.nombre_cliente = ""
-if "carrito" not in st.session_state:
-    st.session_state.carrito = []
+if "paso_wizard" not in st.session_state: st.session_state.paso_wizard = 1
+if "nombre_cliente" not in st.session_state: st.session_state.nombre_cliente = ""
+if "carrito" not in st.session_state: st.session_state.carrito = []
 
 def parse_price(val):
     try: return int(val)
     except: return 0
 
-# Función inteligente para agrupar panes en el carrito
 def agregar_al_carrito(id_prod, nombre, tamano, precio_num):
     for item in st.session_state.carrito:
         if item["id_prod"] == id_prod and item["tamano"] == tamano:
@@ -52,7 +46,7 @@ def agregar_al_carrito(id_prod, nombre, tamano, precio_num):
     })
 
 # ==========================================
-# VISTA CLIENTE (WIZARD PASO A PASO)
+# VISTA CLIENTE
 # ==========================================
 def vista_cliente():
     st.markdown("<div class='titulo-nuestro'>Nuestro</div>", unsafe_allow_html=True)
@@ -67,28 +61,23 @@ def vista_cliente():
     fecha_entrega = (ahora + datetime.timedelta(days=1)).date() if ahora.hour < 20 else (ahora + datetime.timedelta(days=2)).date()
     st.info(f"📅 Pedidos para la mañana del: **{fecha_entrega.strftime('%d-%m-%Y')}**")
 
-    # --- WIZARD PASO 1: IDENTIFICACIÓN ---
     if st.session_state.paso_wizard == 1:
         with st.container(border=True):
             st.subheader("👋 ¡Hola! ¿Para quién es el pedido?")
             nombre = st.text_input("Ingresa tu Nombre y Apellido", value=st.session_state.nombre_cliente)
             
             if st.button("Continuar al Menú ➔", type="primary", use_container_width=True):
-                if not nombre.strip():
-                    st.error("Por favor, dinos tu nombre para poder entregarte el pan.")
+                if not nombre.strip(): st.error("Por favor, dinos tu nombre para poder entregarte el pan.")
                 else:
                     st.session_state.nombre_cliente = nombre.strip()
                     st.session_state.paso_wizard = 2
                     st.rerun()
 
-    # --- WIZARD PASO 2: ELEGIR ANTOJO ---
     elif st.session_state.paso_wizard == 2:
         df_productos = db.get_productos()
-        
         col_izq, col_der = st.columns([3, 1])
         col_izq.subheader(f"🛒 ¿Qué se te antoja, {st.session_state.nombre_cliente.split()[0]}?")
         
-        # Mostrar cuántos panes lleva en el carrito actualmente
         if st.session_state.carrito:
             if col_der.button(f"🛒 Ver pedido ({sum(i['cantidad'] for i in st.session_state.carrito)})", type="primary", use_container_width=True):
                 st.session_state.paso_wizard = 3
@@ -100,10 +89,8 @@ def vista_cliente():
 
         for index, prod_data in df_productos.iterrows():
             precio_n, precio_xl = parse_price(prod_data['precio_normal']), parse_price(prod_data['precio_xl'])
-            
             with st.container(border=True):
                 st.markdown(f"#### 🥪 {prod_data['nombre']}")
-                
                 c_btn1, c_btn2 = st.columns(2)
                 with c_btn1:
                     if precio_n > 0 and st.button(f"➕ Normal (${precio_n})", key=f"btn_n_{prod_data['id']}", use_container_width=True):
@@ -116,23 +103,17 @@ def vista_cliente():
                         st.session_state.paso_wizard = 3
                         st.rerun()
 
-    # --- WIZARD PASO 3: CONFIRMACIÓN ---
     elif st.session_state.paso_wizard == 3:
         with st.container(border=True):
             st.subheader("🧾 Resumen de tu Pedido")
-            
             for i, item in enumerate(st.session_state.carrito):
                 c_txt, c_del = st.columns([5, 1])
                 c_txt.markdown(f"✅ **{item['cantidad']}x** {item['nombre']} _({item['precio_texto']})_")
                 if c_del.button("❌", key=f"del_{i}", help="Quitar este pan"):
                     st.session_state.carrito.pop(i)
-                    # Si borra todo, lo devolvemos al menú
-                    if not st.session_state.carrito:
-                        st.session_state.paso_wizard = 2
+                    if not st.session_state.carrito: st.session_state.paso_wizard = 2
                     st.rerun()
-            
             st.divider()
-            
             c_add, c_env = st.columns(2)
             if c_add.button("➕ Añadir otro pan", use_container_width=True):
                 st.session_state.paso_wizard = 2
@@ -142,14 +123,13 @@ def vista_cliente():
                 for item in st.session_state.carrito:
                     db.agregar_pedido(st.session_state.nombre_cliente, item["id_prod"], item["tamano"], item["cantidad"], fecha_entrega)
                 st.session_state.carrito = []
-                st.session_state.paso_wizard = 1 # Reiniciamos para el siguiente cliente
+                st.session_state.paso_wizard = 1 
                 st.session_state.nombre_cliente = ""
-                st.toast("¡Pedido enviado a cocina!", icon="✅")
                 st.success("¡Tu pedido fue agendado exitosamente! Ya puedes cerrar esta pantalla.")
                 st.balloons()
 
 # ==========================================
-# VISTA ADMINISTRADOR (PANEL OCULTO)
+# VISTA ADMINISTRADOR
 # ==========================================
 def vista_admin():
     st.markdown("## Panel de Administración")
@@ -172,7 +152,8 @@ def vista_admin():
     manana = ahora.date() + datetime.timedelta(days=1)
     fecha_filtro = st.date_input("🗓️ Filtrar fecha:", value=manana)
     
-    tab_cocina, tab_pagos, tab_cancelar, tab_menu = st.tabs(["👨‍🍳 Producción", "💰 Pagos Express", "🗑️ Anular", "⚙️ Menú"])
+    # Renombrado de pestaña a "Logística y Pagos"
+    tab_cocina, tab_pagos, tab_cancelar, tab_menu = st.tabs(["👨‍🍳 Producción", "📋 Logística y Pagos", "🗑️ Anular", "⚙️ Menú"])
     
     df_pedidos = db.get_pedidos(fecha_filtro)
     df_productos = db.get_productos()
@@ -194,14 +175,17 @@ def vista_admin():
             df_detalle = df_join[['cliente_nombre', 'cantidad', 'nombre', 'tamano']]
             c2.dataframe(df_detalle.rename(columns={'cliente_nombre':'Cliente', 'cantidad':'#'}), hide_index=True)
 
-    # --- PAGOS EXPRESS ---
+    # --- LOGÍSTICA Y PAGOS EXPRESS ---
     with tab_pagos:
         if not hay_datos:
             st.info("Sin pedidos registrados.")
         else:
-            st.write("Marca los pagos como si fuera Excel. No olvides presionar **Sincronizar** al terminar.")
-            df_edit = df_join[['id_x', 'cliente_nombre', 'cantidad', 'nombre', 'tamano', 'Monto', 'pagado']].copy()
-            df_edit['pagado'] = df_edit['pagado'].astype(str) == '1'
+            st.write("Gestiona retiros y pagos como en un Excel. Presiona **Sincronizar** para guardar los cambios.")
+            
+            # Aseguramos extraer la columna entregado y limpiar celdas vacías viejas
+            df_edit = df_join[['id_x', 'cliente_nombre', 'cantidad', 'nombre', 'tamano', 'Monto', 'entregado', 'pagado']].copy()
+            df_edit['entregado'] = df_edit['entregado'].astype(str).replace('', '0') == '1'
+            df_edit['pagado'] = df_edit['pagado'].astype(str).replace('', '0') == '1'
             
             edited_df = st.data_editor(
                 df_edit,
@@ -212,6 +196,7 @@ def vista_admin():
                     "nombre": st.column_config.TextColumn("Producto", disabled=True),
                     "tamano": st.column_config.TextColumn("Tam.", disabled=True),
                     "Monto": st.column_config.NumberColumn("Valor ($)", disabled=True),
+                    "entregado": st.column_config.CheckboxColumn("¿Retiró?"),
                     "pagado": st.column_config.CheckboxColumn("¿Pagó?")
                 },
                 hide_index=True,
@@ -219,21 +204,27 @@ def vista_admin():
                 key="editor_pagos"
             )
             
-            if st.button("💾 Sincronizar Pagos en la Nube", type="primary", use_container_width=True):
-                cambios = {}
-                for idx, row in df_edit.iterrows():
-                    if row['pagado'] != edited_df.iloc[idx]['pagado']:
-                        cambios[row['id_x']] = edited_df.iloc[idx]['pagado']
+            if st.button("💾 Sincronizar Cambios en la Nube", type="primary", use_container_width=True):
+                cambios_pagos = {}
+                cambios_retiros = {}
                 
-                if cambios:
-                    with st.spinner("Guardando..."):
-                        db.actualizar_pagos_lote(cambios)
-                    st.success(f"¡{len(cambios)} pagos actualizados de golpe!")
+                for idx, row in df_edit.iterrows():
+                    # Detectar cambios en pagos
+                    if row['pagado'] != edited_df.iloc[idx]['pagado']:
+                        cambios_pagos[row['id_x']] = edited_df.iloc[idx]['pagado']
+                    # Detectar cambios en retiros
+                    if row['entregado'] != edited_df.iloc[idx]['entregado']:
+                        cambios_retiros[row['id_x']] = edited_df.iloc[idx]['entregado']
+                
+                if cambios_pagos or cambios_retiros:
+                    with st.spinner("Guardando en Google Sheets..."):
+                        db.actualizar_estados_lote(cambios_pagos, cambios_retiros)
+                    st.success(f"¡Sincronización exitosa!")
                     st.rerun()
                 else:
                     st.info("No detecté ningún cambio.")
 
-    # --- ANULAR PEDIDOS ---
+    # --- ANULAR ---
     with tab_cancelar:
         if hay_datos:
             opciones = {f"{r['cliente_nombre']} ({r['nombre']})": r['id_x'] for _, r in df_join.iterrows()}
@@ -253,7 +244,7 @@ def vista_admin():
                 st.rerun()
 
 # ==========================================
-# MOTOR PRINCIPAL Y SEGURIDAD
+# MOTOR PRINCIPAL
 # ==========================================
 inyectar_css()
 
