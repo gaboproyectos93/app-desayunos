@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import datetime
-import base64
-import os
 from zoneinfo import ZoneInfo
 import db_desayunos as db 
 
@@ -12,14 +10,7 @@ def obtener_hora_chile():
     try: return datetime.datetime.now(ZoneInfo("America/Santiago"))
     except: return datetime.datetime.utcnow() - datetime.timedelta(hours=4)
 
-def get_base64_image(image_path):
-    if os.path.exists(image_path):
-        with open(image_path, "rb") as img_file: return base64.b64encode(img_file.read()).decode()
-    return ""
-
 def inyectar_css():
-    img_path = "img/carta_adaptable.png"
-    img_base64 = get_base64_image(img_path)
     estilo = f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Oswald:wght@500&display=swap');
@@ -27,19 +18,15 @@ def inyectar_css():
     .titulo-menu {{ font-family: 'Oswald', sans-serif; font-size: 4.5rem; text-align: center; letter-spacing: 6px; margin-bottom: 20px; }}
     @media (prefers-color-scheme: light) {{ .titulo-nuestro {{ color: #2C3E50; }} .titulo-menu {{ color: #D35400; }} }}
     @media (prefers-color-scheme: dark) {{ .titulo-nuestro {{ color: #ffffff; }} .titulo-menu {{ color: #F39C12; }} }}
-    .carta-visual-container {{ text-align: center; margin-top: -30px; margin-bottom: 30px; }}
-    .carta-visual-container img {{ max-width: 100%; border-radius: 12px; box-shadow: 0px 8px 16px rgba(0,0,0,0.3); }}
     
     /* Botones personalizados amarillos */
-    button[kind="primary"] {{ background-color: #F39C12 !important; color: #000000 !important; border: 1px solid #F39C12 !important; }}
+    button[kind="primary"] {{ background-color: #F39C12 !important; color: #000000 !important; border: 1px solid #F39C12 !important; transition: all 0.3s ease !important; }}
     button[kind="primary"]:hover {{ background-color: #D35400 !important; border-color: #D35400 !important; }}
-    button[kind="secondary"] {{ background-color: transparent !important; color: #F39C12 !important; border: 1px solid #F39C12 !important; }}
+    button[kind="secondary"] {{ background-color: transparent !important; color: #F39C12 !important; border: 1px solid #F39C12 !important; transition: all 0.3s ease !important; }}
     button[kind="secondary"]:hover {{ background-color: rgba(243, 156, 18, 0.1) !important; border-color: #F39C12 !important; }}
     </style>
     """
     st.markdown(estilo, unsafe_allow_html=True)
-    if img_base64:
-        st.markdown(f'''<div class="carta-visual-container"><img src="data:image/png;base64,{img_base64}" alt="Carta"></div>''', unsafe_allow_html=True)
 
 # Inicializar las variables del Wizard en la memoria de la app
 if "paso_wizard" not in st.session_state:
@@ -52,6 +39,17 @@ if "carrito" not in st.session_state:
 def parse_price(val):
     try: return int(val)
     except: return 0
+
+# Función inteligente para agrupar panes en el carrito
+def agregar_al_carrito(id_prod, nombre, tamano, precio_num):
+    for item in st.session_state.carrito:
+        if item["id_prod"] == id_prod and item["tamano"] == tamano:
+            item["cantidad"] += 1
+            return
+    st.session_state.carrito.append({
+        "id_prod": id_prod, "nombre": nombre, "tamano": tamano, 
+        "cantidad": 1, "precio_texto": f"{tamano} (${precio_num})"
+    })
 
 # ==========================================
 # VISTA CLIENTE (WIZARD PASO A PASO)
@@ -89,27 +87,32 @@ def vista_cliente():
         
         col_izq, col_der = st.columns([3, 1])
         col_izq.subheader(f"🛒 ¿Qué se te antoja, {st.session_state.nombre_cliente.split()[0]}?")
-        if col_der.button("Volver", use_container_width=True):
-            st.session_state.paso_wizard = 1
-            st.rerun()
+        
+        # Mostrar cuántos panes lleva en el carrito actualmente
+        if st.session_state.carrito:
+            if col_der.button(f"🛒 Ver pedido ({sum(i['cantidad'] for i in st.session_state.carrito)})", type="primary", use_container_width=True):
+                st.session_state.paso_wizard = 3
+                st.rerun()
+        else:
+            if col_der.button("Volver", use_container_width=True):
+                st.session_state.paso_wizard = 1
+                st.rerun()
 
         for index, prod_data in df_productos.iterrows():
             precio_n, precio_xl = parse_price(prod_data['precio_normal']), parse_price(prod_data['precio_xl'])
             
             with st.container(border=True):
-                col_titulo, col_cant = st.columns([3, 1])
-                col_titulo.markdown(f"#### 🥪 {prod_data['nombre']}")
-                cantidad = col_cant.number_input("Cant.", min_value=1, max_value=20, value=1, key=f"qty_{prod_data['id']}", label_visibility="collapsed")
+                st.markdown(f"#### 🥪 {prod_data['nombre']}")
                 
                 c_btn1, c_btn2 = st.columns(2)
                 with c_btn1:
-                    if precio_n > 0 and st.button(f"Normal (${precio_n})", key=f"btn_n_{prod_data['id']}", use_container_width=True):
-                        st.session_state.carrito.append({"id_prod": str(prod_data['id']), "nombre": prod_data['nombre'], "tamano": "Normal", "cantidad": cantidad, "precio_texto": f"Normal (${precio_n})"})
+                    if precio_n > 0 and st.button(f"➕ Normal (${precio_n})", key=f"btn_n_{prod_data['id']}", use_container_width=True):
+                        agregar_al_carrito(str(prod_data['id']), prod_data['nombre'], "Normal", precio_n)
                         st.session_state.paso_wizard = 3
                         st.rerun()
                 with c_btn2:
-                    if precio_xl > 0 and st.button(f"Añadir XL (${precio_xl})", type="primary", key=f"btn_xl_{prod_data['id']}", use_container_width=True):
-                        st.session_state.carrito.append({"id_prod": str(prod_data['id']), "nombre": prod_data['nombre'], "tamano": "XL", "cantidad": cantidad, "precio_texto": f"XL (${precio_xl})"})
+                    if precio_xl > 0 and st.button(f"➕ XL (${precio_xl})", type="primary", key=f"btn_xl_{prod_data['id']}", use_container_width=True):
+                        agregar_al_carrito(str(prod_data['id']), prod_data['nombre'], "XL", precio_xl)
                         st.session_state.paso_wizard = 3
                         st.rerun()
 
@@ -117,12 +120,24 @@ def vista_cliente():
     elif st.session_state.paso_wizard == 3:
         with st.container(border=True):
             st.subheader("🧾 Resumen de tu Pedido")
-            for item in st.session_state.carrito:
-                st.markdown(f"✅ **{item['cantidad']}x** {item['nombre']} _({item['precio_texto']})_")
+            
+            for i, item in enumerate(st.session_state.carrito):
+                c_txt, c_del = st.columns([5, 1])
+                c_txt.markdown(f"✅ **{item['cantidad']}x** {item['nombre']} _({item['precio_texto']})_")
+                if c_del.button("❌", key=f"del_{i}", help="Quitar este pan"):
+                    st.session_state.carrito.pop(i)
+                    # Si borra todo, lo devolvemos al menú
+                    if not st.session_state.carrito:
+                        st.session_state.paso_wizard = 2
+                    st.rerun()
             
             st.divider()
             
-            c_env, c_vol = st.columns([2, 1])
+            c_add, c_env = st.columns(2)
+            if c_add.button("➕ Añadir otro pan", use_container_width=True):
+                st.session_state.paso_wizard = 2
+                st.rerun()
+                
             if c_env.button("🚀 Enviar a Cocina", type="primary", use_container_width=True):
                 for item in st.session_state.carrito:
                     db.agregar_pedido(st.session_state.nombre_cliente, item["id_prod"], item["tamano"], item["cantidad"], fecha_entrega)
@@ -132,11 +147,6 @@ def vista_cliente():
                 st.toast("¡Pedido enviado a cocina!", icon="✅")
                 st.success("¡Tu pedido fue agendado exitosamente! Ya puedes cerrar esta pantalla.")
                 st.balloons()
-            
-            if c_vol.button("Cancelar", use_container_width=True):
-                st.session_state.carrito = []
-                st.session_state.paso_wizard = 2
-                st.rerun()
 
 # ==========================================
 # VISTA ADMINISTRADOR (PANEL OCULTO)
@@ -184,7 +194,7 @@ def vista_admin():
             df_detalle = df_join[['cliente_nombre', 'cantidad', 'nombre', 'tamano']]
             c2.dataframe(df_detalle.rename(columns={'cliente_nombre':'Cliente', 'cantidad':'#'}), hide_index=True)
 
-    # --- NUEVO: PAGOS EXPRESS CON DATA_EDITOR ---
+    # --- PAGOS EXPRESS ---
     with tab_pagos:
         if not hay_datos:
             st.info("Sin pedidos registrados.")
@@ -193,11 +203,10 @@ def vista_admin():
             df_edit = df_join[['id_x', 'cliente_nombre', 'cantidad', 'nombre', 'tamano', 'Monto', 'pagado']].copy()
             df_edit['pagado'] = df_edit['pagado'].astype(str) == '1'
             
-            # Tabla interactiva ultrarrápida
             edited_df = st.data_editor(
                 df_edit,
                 column_config={
-                    "id_x": None, # Ocultamos el ID para que no moleste
+                    "id_x": None,
                     "cliente_nombre": st.column_config.TextColumn("Cliente", disabled=True),
                     "cantidad": st.column_config.NumberColumn("Cant.", disabled=True),
                     "nombre": st.column_config.TextColumn("Producto", disabled=True),
@@ -211,7 +220,6 @@ def vista_admin():
             )
             
             if st.button("💾 Sincronizar Pagos en la Nube", type="primary", use_container_width=True):
-                # Detectar qué casillas cambiaron
                 cambios = {}
                 for idx, row in df_edit.iterrows():
                     if row['pagado'] != edited_df.iloc[idx]['pagado']:
@@ -249,12 +257,11 @@ def vista_admin():
 # ==========================================
 inyectar_css()
 
-# El panel de administrador ahora está escondido en el menú lateral
 with st.sidebar:
     st.write("### Acceso Interno")
     clave = st.text_input("Contraseña", type="password")
     
-if clave == "gabo2026": # ¡Puedes cambiar esta clave por la que quieras!
+if clave == "gabo2026": 
     vista_admin()
 else:
     vista_cliente()
