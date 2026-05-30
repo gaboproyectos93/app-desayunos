@@ -2,9 +2,9 @@ import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
 import uuid
+import calendar # <-- NUEVO IMPORT PARA CALCULAR LOS MESES
 
 def conectar_supabase() -> Client:
-    """Establece la conexión directa con el cliente de Supabase"""
     try:
         url: str = st.secrets["supabase"]["url"]
         key: str = st.secrets["supabase"]["key"]
@@ -30,6 +30,18 @@ def get_pedidos(fecha_str=None):
         return pd.DataFrame(columns=["id", "cliente_nombre", "producto_id", "tamano", "cantidad", "fecha_entrega", "pagado", "entregado"])
     return pd.DataFrame(res.data)
 
+# --- NUEVA FUNCIÓN: OBTENER PEDIDOS DEL MES ---
+def get_pedidos_mes(anio, mes):
+    supabase = conectar_supabase()
+    _, ultimo_dia = calendar.monthrange(anio, mes)
+    fecha_inicio = f"{anio}-{mes:02d}-01"
+    fecha_fin = f"{anio}-{mes:02d}-{ultimo_dia}"
+    
+    res = supabase.table("pedidos").select("*").gte("fecha_entrega", fecha_inicio).lte("fecha_entrega", fecha_fin).execute()
+    if not res.data:
+        return pd.DataFrame(columns=["id", "cliente_nombre", "producto_id", "tamano", "cantidad", "fecha_entrega", "pagado", "entregado"])
+    return pd.DataFrame(res.data)
+
 def agregar_pedido(cliente_nombre, producto_id, tamano, cantidad, fecha_entrega):
     supabase = conectar_supabase()
     nuevo_id = str(uuid.uuid4())[:8]
@@ -45,7 +57,6 @@ def agregar_pedido(cliente_nombre, producto_id, tamano, cantidad, fecha_entrega)
     }).execute()
 
 def actualizar_estados_lote(cambios_pagos, cambios_retiros):
-    """Actualiza filas de forma asíncrona en Supabase (toma milisegundos)"""
     supabase = conectar_supabase()
     for pid, valor in cambios_pagos.items():
         supabase.table("pedidos").update({"pagado": bool(valor)}).eq("id", pid).execute()
