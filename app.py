@@ -45,9 +45,8 @@ def agregar_al_carrito(id_prod, nombre, tamano, precio_num, cantidad):
         "cantidad": cantidad, "precio_texto": f"{tamano} (${precio_num})"
     })
 
-# --- NUEVA FUNCIÓN CENTRAL PARA EL RANKING ---
 def obtener_ranking_limpio(mes, anio):
-    """Calcula el ranking mensual excluyendo automáticamente al administrador"""
+    """Calcula el ranking mensual y aplica desempate por cantidad de productos"""
     df_ped_mes = db.get_pedidos_mes(anio, mes)
     df_productos = db.get_productos()
     
@@ -59,11 +58,13 @@ def obtener_ranking_limpio(mes, anio):
     df_join = pd.merge(df_ped_mes, df_productos, left_on='producto_id', right_on='id', how='left')
     df_join['Monto'] = df_join.apply(lambda row: parse_price(row['precio_normal']) * int(row['cantidad']) if str(row['tamano']).strip() == 'Normal' else parse_price(row['precio_xl']) * int(row['cantidad']), axis=1)
 
-    # Excluir a Gabo (ignorando mayúsculas/minúsculas y espacios extra)
+    # Excluir a Gabo
     df_join = df_join[~df_join['cliente_nombre'].str.strip().str.lower().isin(['gabo'])]
 
-    ranking = df_join.groupby('cliente_nombre')['Monto'].sum().reset_index()
-    return ranking.sort_values('Monto', ascending=False).reset_index(drop=True)
+    # Sumar Monto y Cantidad por cliente
+    ranking = df_join.groupby('cliente_nombre').agg({'Monto': 'sum', 'cantidad': 'sum'}).reset_index()
+    # ORDENAR: 1° Por Dinero (Descendente), 2° Por Cantidad (Descendente) en caso de empate
+    return ranking.sort_values(by=['Monto', 'cantidad'], ascending=[False, False]).reset_index(drop=True)
 
 # ==========================================
 # VISTA CLIENTE
@@ -72,35 +73,52 @@ def vista_cliente():
     st.markdown("<div class='titulo-nuestro'>Nuestro</div>", unsafe_allow_html=True)
     st.markdown("<div class='titulo-menu'>MENÚ</div>", unsafe_allow_html=True)
     
-    estado_sistema = db.get_estado_sistema()
-    if estado_sistema == "Cerrado":
-        st.error("⏳ **La cocina está cerrada.** No estamos recibiendo pedidos en este momento.")
+    ahora = obtener_hora_chile()
+    
+    # 1. VERIFICAR CIERRE MANUAL DE EMERGENCIA
+    estado_manual = db.get_config("estado_pedidos", "Abierto")
+    if estado_manual == "Cerrado":
+        st.error("🔒 **La cocina está cerrada.** (Cierre temporal administrativo).")
         return
 
-    ahora = obtener_hora_chile()
-    fecha_entrega = (ahora + datetime.timedelta(days=1)).date() if ahora.hour < 20 else (ahora + datetime.timedelta(days=2)).date()
-    st.info(f"📅 Pedidos para la mañana del: **{fecha_entrega.strftime('%d-%m-%Y')}**")
+    # 2. VERIFICAR HORARIO AUTOMÁTICO
+    dias_str = db.get_config("dias_abierto", "0,1,2,3,4")
+    dias_permitidos = [int(x) for x in dias_str.split(",")] if dias_str else []
+    hora_i = db.get_config("hora_inicio", "08:00")
+    hora_f = db.get_config("hora_fin", "20:00")
+    hora_actual = ahora.strftime("%H:%M")
+    
+    if ahora.weekday() not in dias_permitidos or not (hora_i <= hora_actual <= hora_f):
+        st.error(f"⏳ **Fuera de horario.** Atendemos dentro del horario configurado ({hora_i} a {hora_f}).")
+        return
 
-    # --- PASO 1: IDENTIFICACIÓN Y PODIO ---
+    fecha_entrega = (ahora + datetime.timedelta(days=1)).date() if ahora.hour < 20 else (ahora + datetime.timedelta(days=2)).date()
+    st.info(f"📅 Recibiendo pedidos para el: **{fecha_entrega.strftime('%d-%m-%Y')}**")
+
+    # --- PASO 1: IDENTIFICACIÓN Y PODIO TOP 5 ---
     if st.session_state.paso_wizard == 1:
         
-        # EL PODIO VISUAL PARA LOS CLIENTES
-        with st.container(border=True):
-            st.subheader("🏆 Rey del Desayuno")
-            st.markdown("🎁 **¡El #1 del mes se lleva un pedido GRATIS (tope $2.500)!**")
-            
-            ranking_df = obtener_ranking_limpio(ahora.month, ahora.year)
-            
-            if not ranking_df.empty:
-                top_3 = ranking_df.head(3)
-                c1, c2, c3 = st.columns(3)
-                if len(top_3) > 0: c1.success(f"🥇 1°\n**{top_3.iloc[0]['cliente_nombre'].title()}**")
-                if len(top_3) > 1: c2.warning(f"🥈 2°\n**{top_3.iloc[1]['cliente_nombre'].title()}**")
-                if len(top_3) > 2: c3.info(f"🥉 3°\n**{top_3.iloc[2]['cliente_nombre'].title()}**")
-            else:
-                st.write("Aún no hay pedidos este mes. ¡Sé el primero en participar!")
+        mostrar_ranking = db.get_config("mostrar_ranking", "Si")
+        if mostrar_ranking == "Si":
+            with st.container(border=True):
+                st.subheader("🏆 Rey del Desayuno")
+                st.markdown("🎁 **¡El #1 del mes se lleva un pedido GRATIS (tope $2.500)!**")
+                st.caption("*(En caso de empate, gana quien haya comprado mayor cantidad de panes en el mes)*")
                 
-        st.write("") # Espaciador
+                ranking_df = obtener_ranking_limpio(ahora.month, ahora.year)
+                
+                if not ranking_df.empty:
+                    top_5 = ranking_df.head(5)
+                    # Lista vertical hermosa para celulares
+                    for i, row in top_5.iterrows():
+                        pos = i + 1
+                        if pos == 1: st.success(f"🥇 **1° {row['cliente_nombre'].title()}** — _{row['cantidad']} panes_")
+                        elif pos == 2: st.warning(f"🥈 **2° {row['cliente_nombre'].title()}** — _{row['cantidad']} panes_")
+                        elif pos == 3: st.info(f"🥉 **3° {row['cliente_nombre'].title()}** — _{row['cantidad']} panes_")
+                        else: st.markdown(f"🏅 **{pos}° {row['cliente_nombre'].title()}** — _{row['cantidad']} panes_")
+                else:
+                    st.write("Aún no hay pedidos este mes. ¡Anímate a ser el primero!")
+            st.write("") 
 
         with st.container(border=True):
             st.subheader("👋 ¡Hola! ¿Para quién es el pedido?")
@@ -180,33 +198,32 @@ def vista_cliente():
 # ==========================================
 def vista_admin():
     st.markdown("## Panel de Administración")
-    estado_actual = db.get_estado_sistema()
     
+    # Este botón de pánico bloquea TODO independientemente del horario automático
+    estado_actual = db.get_config("estado_pedidos", "Abierto")
     with st.container(border=True):
         col_txt, col_btn = st.columns([3, 1])
         if estado_actual == "Abierto":
-            col_txt.success("🟢 **SISTEMA ABIERTO**")
-            if col_btn.button("🔒 Cerrar", use_container_width=True):
-                db.guardar_estado_sistema("Cerrado")
+            col_txt.success("🟢 **BOTÓN DE PÁNICO APAGADO:** El sistema está respetando el horario automático.")
+            if col_btn.button("🔒 Forzar Cierre General", use_container_width=True):
+                db.set_config("estado_pedidos", "Cerrado")
                 st.rerun()
         else:
-            col_txt.error("🔴 **SISTEMA CERRADO**")
-            if col_btn.button("🔓 Abrir", type="primary", use_container_width=True):
-                db.guardar_estado_sistema("Abierto")
+            col_txt.error("🔴 **BOTÓN DE PÁNICO ACTIVADO:** La tienda está cerrada para los clientes.")
+            if col_btn.button("🔓 Quitar Bloqueo", type="primary", use_container_width=True):
+                db.set_config("estado_pedidos", "Abierto")
                 st.rerun()
 
     ahora = obtener_hora_chile()
     manana = ahora.date() + datetime.timedelta(days=1)
     
-    tab_cocina, tab_pagos, tab_ranking, tab_cancelar, tab_menu = st.tabs(["👨‍🍳 Producción", "📋 Logística", "🏆 Ranking", "🗑️ Anular", "⚙️ Menú"])
+    tab_cocina, tab_pagos, tab_ranking, tab_cancelar, tab_ajustes = st.tabs(["👨‍🍳 Producción", "📋 Pagos", "🏆 Ranking Admin", "🗑️ Anular", "⚙️ Ajustes"])
     df_productos = db.get_productos()
 
     with tab_cocina:
         fecha_filtro_prod = st.date_input("🗓️ Fecha de producción:", value=manana, key="d1")
         df_pedidos_diario = db.get_pedidos(fecha_filtro_prod)
-        hay_datos_diarios = not df_pedidos_diario.empty and not df_productos.empty
-        
-        if hay_datos_diarios:
+        if not df_pedidos_diario.empty and not df_productos.empty:
             df_pedidos_diario['producto_id'] = df_pedidos_diario['producto_id'].astype(str)
             df_join_d = pd.merge(df_pedidos_diario, df_productos, left_on='producto_id', right_on='id', how='left')
             c1, c2 = st.columns(2)
@@ -248,7 +265,7 @@ def vista_admin():
             st.info("Sin pedidos registrados.")
 
     with tab_ranking:
-        st.subheader("👑 Rey del Desayuno (Admin)")
+        st.subheader("👑 Tabla General Mensual (Privado)")
         c_mes, c_anio = st.columns(2)
         meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
         mes_seleccionado = c_mes.selectbox("Mes:", range(len(meses)), index=ahora.month-1, format_func=lambda x: meses[x])
@@ -261,10 +278,10 @@ def vista_admin():
         else:
             ranking.index = ranking.index + 1 
             ganador = ranking.iloc[0]
-            st.success(f"🏆 **¡{ganador['cliente_nombre'].upper()}** va liderando la competencia con **${ganador['Monto']:,.0f}** en compras!")
+            st.success(f"🏆 **{ganador['cliente_nombre'].upper()}** va liderando con **${ganador['Monto']:,.0f}** ({ganador['cantidad']} productos)!")
             
-            ranking.rename(columns={'cliente_nombre': 'Cliente', 'Monto': 'Total Gastado ($)'}, inplace=True)
-            st.dataframe(ranking, column_config={"Total Gastado ($)": st.column_config.NumberColumn(format="$%d")}, use_container_width=True)
+            ranking.rename(columns={'cliente_nombre': 'Cliente', 'Monto': 'Dinero Gastado ($)', 'cantidad': 'Cant. Productos'}, inplace=True)
+            st.dataframe(ranking, column_config={"Dinero Gastado ($)": st.column_config.NumberColumn(format="$%d")}, use_container_width=True)
 
     with tab_cancelar:
         fecha_filtro_canc = st.date_input("🗓️ Fecha a buscar:", value=manana, key="d3")
@@ -278,14 +295,60 @@ def vista_admin():
                 db.anular_pedido(opciones[borrar])
                 st.rerun()
 
-    with tab_menu:
+    with tab_ajustes:
+        st.subheader("🗓️ Horario Automático de Pedidos")
+        st.write("Selecciona en qué horario los clientes pueden pedir desde sus celulares:")
+        c_dias, c_horas = st.columns([2, 1])
+        dias_semana = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+        
+        dias_guardados = db.get_config("dias_abierto", "0,1,2,3,4")
+        dias_indices = [int(x) for x in dias_guardados.split(",")] if dias_guardados else []
+        dias_default = [dias_semana[i] for i in dias_indices if i < 7]
+        dias_seleccionados = c_dias.multiselect("Días habilitados:", dias_semana, default=dias_default)
+        
+        hora_i = db.get_config("hora_inicio", "08:00")
+        hora_f = db.get_config("hora_fin", "20:00")
+        
+        c_h1, c_h2 = c_horas.columns(2)
+        nueva_h_i = c_h1.time_input("Apertura:", value=datetime.datetime.strptime(hora_i, "%H:%M").time())
+        nueva_h_f = c_h2.time_input("Cierre:", value=datetime.datetime.strptime(hora_f, "%H:%M").time())
+        
+        st.divider()
+        st.subheader("🏆 Configuración del Ranking")
+        mostrar_r = db.get_config("mostrar_ranking", "Si")
+        nuevo_mostrar = st.radio("¿Mostrar el Podio Top 5 a los clientes?", ["Si", "No"], index=0 if mostrar_r == "Si" else 1, horizontal=True)
+        
+        if st.button("💾 Guardar Ajustes Generales", type="primary"):
+            indices_str = ",".join([str(dias_semana.index(d)) for d in dias_seleccionados])
+            db.set_config("dias_abierto", indices_str)
+            db.set_config("hora_inicio", nueva_h_i.strftime("%H:%M"))
+            db.set_config("hora_fin", nueva_h_f.strftime("%H:%M"))
+            db.set_config("mostrar_ranking", nuevo_mostrar)
+            st.success("Ajustes guardados correctamente.")
+            st.rerun()
+            
+        st.divider()
+        st.subheader("🍔 Gestión del Menú")
         if not df_productos.empty:
             st.dataframe(df_productos.drop(columns=['id']), hide_index=True, use_container_width=True)
-            prod_eliminar = st.selectbox("Eliminar:", df_productos['nombre'].tolist())
-            if st.button("Dar de baja"):
-                id_eliminar = df_productos[df_productos['nombre'] == prod_eliminar]['id'].iloc[0]
-                db.eliminar_producto(id_eliminar)
-                st.rerun()
+        
+        col_add, col_del = st.columns(2)
+        with col_add:
+            nuevo_nombre = st.text_input("Agregar Nombre Pan")
+            c1, c2 = st.columns(2)
+            with c1: nuevo_normal = st.number_input("Precio Normal ($)", min_value=0, step=100)
+            with c2: nuevo_xl = st.number_input("Precio XL ($)", min_value=0, step=100)
+            if st.button("Guardar Producto", type="primary"):
+                if nuevo_nombre.strip():
+                    db.agregar_producto(nuevo_nombre.strip(), nuevo_normal, nuevo_xl)
+                    st.rerun()
+        with col_del:
+            if not df_productos.empty:
+                prod_eliminar = st.selectbox("Eliminar Producto:", df_productos['nombre'].tolist())
+                if st.button("Dar de baja"):
+                    id_eliminar = df_productos[df_productos['nombre'] == prod_eliminar]['id'].iloc[0]
+                    db.eliminar_producto(id_eliminar)
+                    st.rerun()
 
 # ==========================================
 # EXECUTION
