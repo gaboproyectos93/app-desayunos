@@ -4,7 +4,7 @@ import datetime
 from zoneinfo import ZoneInfo
 import db_desayunos as db 
 
-st.set_page_config(page_title="Menú Desayunos", page_icon="🥪", layout="centered")
+st.set_page_config(page_title="Desayunos Caseros", page_icon="🥪", layout="centered")
 
 def obtener_hora_chile():
     try: return datetime.datetime.now(ZoneInfo("America/Santiago"))
@@ -14,7 +14,7 @@ def inyectar_css():
     estilo = f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Oswald:wght@500&display=swap');
-    .titulo-nuestro {{ font-family: 'Dancing Script', cursive; font-size: 4rem; text-align: center; margin-bottom: -30px; }}
+    .titulo-nuestro {{ font-family: 'Dancing Script', cursive; font-size: 4.5rem; text-align: center; margin-bottom: -30px; }}
     .titulo-menu {{ font-family: 'Oswald', sans-serif; font-size: 4.5rem; text-align: center; letter-spacing: 6px; margin-bottom: 20px; }}
     @media (prefers-color-scheme: light) {{ .titulo-nuestro {{ color: #2C3E50; }} .titulo-menu {{ color: #D35400; }} }}
     @media (prefers-color-scheme: dark) {{ .titulo-nuestro {{ color: #ffffff; }} .titulo-menu {{ color: #F39C12; }} }}
@@ -70,8 +70,9 @@ def obtener_ranking_limpio(mes, anio):
 # VISTA CLIENTE
 # ==========================================
 def vista_cliente():
-    st.markdown("<div class='titulo-nuestro'>Nuestro</div>", unsafe_allow_html=True)
-    st.markdown("<div class='titulo-menu'>MENÚ</div>", unsafe_allow_html=True)
+    # --- NUEVO TÍTULO ---
+    st.markdown("<div class='titulo-nuestro'>Desayunos</div>", unsafe_allow_html=True)
+    st.markdown("<div class='titulo-menu'>CASEROS</div>", unsafe_allow_html=True)
     
     ahora = obtener_hora_chile()
     
@@ -109,7 +110,6 @@ def vista_cliente():
                 
                 if not ranking_df.empty:
                     top_5 = ranking_df.head(5)
-                    # Lista vertical hermosa para celulares
                     for i, row in top_5.iterrows():
                         pos = i + 1
                         if pos == 1: st.success(f"🥇 **1° {row['cliente_nombre'].title()}** — _{row['cantidad']} panes_")
@@ -199,7 +199,6 @@ def vista_cliente():
 def vista_admin():
     st.markdown("## Panel de Administración")
     
-    # Este botón de pánico bloquea TODO independientemente del horario automático
     estado_actual = db.get_config("estado_pedidos", "Abierto")
     with st.container(border=True):
         col_txt, col_btn = st.columns([3, 1])
