@@ -70,7 +70,6 @@ def obtener_ranking_limpio(mes, anio):
 # VISTA CLIENTE
 # ==========================================
 def vista_cliente():
-    # --- NUEVO TÍTULO ---
     st.markdown("<div class='titulo-nuestro'>Desayunos</div>", unsafe_allow_html=True)
     st.markdown("<div class='titulo-menu'>CASEROS</div>", unsafe_allow_html=True)
     
@@ -104,7 +103,7 @@ def vista_cliente():
             with st.container(border=True):
                 st.subheader("🏆 Rey del Desayuno")
                 st.markdown("🎁 **¡El #1 del mes se lleva un pedido GRATIS (tope $2.500)!**")
-                st.caption("*(En caso de empate, gana quien haya comprado mayor cantidad de panes en el mes)*")
+                st.caption("*(En caso de empate, gana quien haya comprado mayor cantidad de producto en el mes)*")
                 
                 ranking_df = obtener_ranking_limpio(ahora.month, ahora.year)
                 
@@ -112,10 +111,11 @@ def vista_cliente():
                     top_5 = ranking_df.head(5)
                     for i, row in top_5.iterrows():
                         pos = i + 1
-                        if pos == 1: st.success(f"🥇 **1° {row['cliente_nombre'].title()}** — _{row['cantidad']} panes_")
-                        elif pos == 2: st.warning(f"🥈 **2° {row['cliente_nombre'].title()}** — _{row['cantidad']} panes_")
-                        elif pos == 3: st.info(f"🥉 **3° {row['cliente_nombre'].title()}** — _{row['cantidad']} panes_")
-                        else: st.markdown(f"🏅 **{pos}° {row['cliente_nombre'].title()}** — _{row['cantidad']} panes_")
+                        # Se ha ocultado el recuento de panes en la vista pública
+                        if pos == 1: st.success(f"🥇 **1° {row['cliente_nombre'].title()}**")
+                        elif pos == 2: st.warning(f"🥈 **2° {row['cliente_nombre'].title()}**")
+                        elif pos == 3: st.info(f"🥉 **3° {row['cliente_nombre'].title()}**")
+                        else: st.markdown(f"🏅 **{pos}° {row['cliente_nombre'].title()}**")
                 else:
                     st.write("Aún no hay pedidos este mes. ¡Anímate a ser el primero!")
             st.write("") 
