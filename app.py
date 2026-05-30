@@ -45,6 +45,26 @@ def agregar_al_carrito(id_prod, nombre, tamano, precio_num, cantidad):
         "cantidad": cantidad, "precio_texto": f"{tamano} (${precio_num})"
     })
 
+# --- NUEVA FUNCIÓN CENTRAL PARA EL RANKING ---
+def obtener_ranking_limpio(mes, anio):
+    """Calcula el ranking mensual excluyendo automáticamente al administrador"""
+    df_ped_mes = db.get_pedidos_mes(anio, mes)
+    df_productos = db.get_productos()
+    
+    if df_ped_mes.empty or df_productos.empty:
+        return pd.DataFrame()
+        
+    df_ped_mes['producto_id'] = df_ped_mes['producto_id'].astype(str)
+    df_productos['id'] = df_productos['id'].astype(str)
+    df_join = pd.merge(df_ped_mes, df_productos, left_on='producto_id', right_on='id', how='left')
+    df_join['Monto'] = df_join.apply(lambda row: parse_price(row['precio_normal']) * int(row['cantidad']) if str(row['tamano']).strip() == 'Normal' else parse_price(row['precio_xl']) * int(row['cantidad']), axis=1)
+
+    # Excluir a Gabo (ignorando mayúsculas/minúsculas y espacios extra)
+    df_join = df_join[~df_join['cliente_nombre'].str.strip().str.lower().isin(['gabo'])]
+
+    ranking = df_join.groupby('cliente_nombre')['Monto'].sum().reset_index()
+    return ranking.sort_values('Monto', ascending=False).reset_index(drop=True)
+
 # ==========================================
 # VISTA CLIENTE
 # ==========================================
@@ -61,7 +81,27 @@ def vista_cliente():
     fecha_entrega = (ahora + datetime.timedelta(days=1)).date() if ahora.hour < 20 else (ahora + datetime.timedelta(days=2)).date()
     st.info(f"📅 Pedidos para la mañana del: **{fecha_entrega.strftime('%d-%m-%Y')}**")
 
+    # --- PASO 1: IDENTIFICACIÓN Y PODIO ---
     if st.session_state.paso_wizard == 1:
+        
+        # EL PODIO VISUAL PARA LOS CLIENTES
+        with st.container(border=True):
+            st.subheader("🏆 Rey del Desayuno")
+            st.markdown("🎁 **¡El #1 del mes se lleva un pedido GRATIS (tope $2.500)!**")
+            
+            ranking_df = obtener_ranking_limpio(ahora.month, ahora.year)
+            
+            if not ranking_df.empty:
+                top_3 = ranking_df.head(3)
+                c1, c2, c3 = st.columns(3)
+                if len(top_3) > 0: c1.success(f"🥇 1°\n**{top_3.iloc[0]['cliente_nombre'].title()}**")
+                if len(top_3) > 1: c2.warning(f"🥈 2°\n**{top_3.iloc[1]['cliente_nombre'].title()}**")
+                if len(top_3) > 2: c3.info(f"🥉 3°\n**{top_3.iloc[2]['cliente_nombre'].title()}**")
+            else:
+                st.write("Aún no hay pedidos este mes. ¡Sé el primero en participar!")
+                
+        st.write("") # Espaciador
+
         with st.container(border=True):
             st.subheader("👋 ¡Hola! ¿Para quién es el pedido?")
             nombre = st.text_input("Ingresa tu Nombre y Apellido", value=st.session_state.nombre_cliente)
@@ -72,6 +112,7 @@ def vista_cliente():
                     st.session_state.paso_wizard = 2
                     st.rerun()
 
+    # --- PASO 2: MENÚ COLECTIVO ---
     elif st.session_state.paso_wizard == 2:
         df_productos = db.get_productos()
         col_izq, col_der = st.columns([2, 1])
@@ -108,6 +149,7 @@ def vista_cliente():
                         st.toast(f"Añadido: {cantidad}x {prod_data['nombre']}", icon="🛒")
                         st.rerun()
 
+    # --- PASO 3: CONFIRMACIÓN Y CIERRE ---
     elif st.session_state.paso_wizard == 3:
         with st.container(border=True):
             st.subheader("🧾 Resumen de tu Pedido")
@@ -156,12 +198,9 @@ def vista_admin():
     ahora = obtener_hora_chile()
     manana = ahora.date() + datetime.timedelta(days=1)
     
-    # --- SECCIÓN DE PESTAÑAS (AHORA SON 5) ---
     tab_cocina, tab_pagos, tab_ranking, tab_cancelar, tab_menu = st.tabs(["👨‍🍳 Producción", "📋 Logística", "🏆 Ranking", "🗑️ Anular", "⚙️ Menú"])
-    
     df_productos = db.get_productos()
 
-    # --- PESTAÑAS QUE DEPENDEN DEL FILTRO DIARIO ---
     with tab_cocina:
         fecha_filtro_prod = st.date_input("🗓️ Fecha de producción:", value=manana, key="d1")
         df_pedidos_diario = db.get_pedidos(fecha_filtro_prod)
@@ -170,7 +209,6 @@ def vista_admin():
         if hay_datos_diarios:
             df_pedidos_diario['producto_id'] = df_pedidos_diario['producto_id'].astype(str)
             df_join_d = pd.merge(df_pedidos_diario, df_productos, left_on='producto_id', right_on='id', how='left')
-            
             c1, c2 = st.columns(2)
             df_resumen = df_join_d.groupby(['nombre', 'tamano'])['cantidad'].sum().reset_index()
             c1.dataframe(df_resumen.rename(columns={'nombre':'Producto', 'tamano':'Tam.', 'cantidad':'Cant.'}), hide_index=True)
@@ -209,39 +247,24 @@ def vista_admin():
         else:
             st.info("Sin pedidos registrados.")
 
-    # --- NUEVA PESTAÑA: RANKING MENSUAL ---
     with tab_ranking:
-        st.subheader("👑 Rey del Desayuno")
+        st.subheader("👑 Rey del Desayuno (Admin)")
         c_mes, c_anio = st.columns(2)
         meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
         mes_seleccionado = c_mes.selectbox("Mes:", range(len(meses)), index=ahora.month-1, format_func=lambda x: meses[x])
         anio_seleccionado = c_anio.number_input("Año:", value=ahora.year, step=1)
         
-        df_ped_mes = db.get_pedidos_mes(anio_seleccionado, mes_seleccionado + 1)
+        ranking = obtener_ranking_limpio(mes_seleccionado + 1, anio_seleccionado)
         
-        if df_ped_mes.empty or df_productos.empty:
+        if ranking.empty:
             st.info("Aún no hay compras registradas en este mes.")
         else:
-            df_ped_mes['producto_id'] = df_ped_mes['producto_id'].astype(str)
-            df_join_mes = pd.merge(df_ped_mes, df_productos, left_on='producto_id', right_on='id', how='left')
-            df_join_mes['Monto'] = df_join_mes.apply(lambda row: parse_price(row['precio_normal']) * int(row['cantidad']) if str(row['tamano']).strip() == 'Normal' else parse_price(row['precio_xl']) * int(row['cantidad']), axis=1)
+            ranking.index = ranking.index + 1 
+            ganador = ranking.iloc[0]
+            st.success(f"🏆 **¡{ganador['cliente_nombre'].upper()}** va liderando la competencia con **${ganador['Monto']:,.0f}** en compras!")
             
-            # Sumar todo el dinero gastado por cada cliente
-            ranking = df_join_mes.groupby('cliente_nombre')['Monto'].sum().reset_index()
-            ranking = ranking.sort_values('Monto', ascending=False).reset_index(drop=True)
-            ranking.index = ranking.index + 1 # Enumerar desde el 1
-            
-            if not ranking.empty:
-                ganador = ranking.iloc[0]
-                st.success(f"🏆 **¡{ganador['cliente_nombre'].upper()}** va liderando la competencia con **${ganador['Monto']:,.0f}** en compras!")
-                
-                ranking.rename(columns={'cliente_nombre': 'Cliente', 'Monto': 'Total Gastado ($)'}, inplace=True)
-                # Damos formato de moneda a la columna
-                st.dataframe(
-                    ranking, 
-                    column_config={"Total Gastado ($)": st.column_config.NumberColumn(format="$%d")},
-                    use_container_width=True
-                )
+            ranking.rename(columns={'cliente_nombre': 'Cliente', 'Monto': 'Total Gastado ($)'}, inplace=True)
+            st.dataframe(ranking, column_config={"Total Gastado ($)": st.column_config.NumberColumn(format="$%d")}, use_container_width=True)
 
     with tab_cancelar:
         fecha_filtro_canc = st.date_input("🗓️ Fecha a buscar:", value=manana, key="d3")
@@ -265,7 +288,7 @@ def vista_admin():
                 st.rerun()
 
 # ==========================================
-# MOTOR PRINCIPAL
+# EXECUTION
 # ==========================================
 inyectar_css()
 
