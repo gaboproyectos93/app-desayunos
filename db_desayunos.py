@@ -1,112 +1,87 @@
 import streamlit as st
-import gspread
+from supabase import create_client, Client
 import pandas as pd
-import json
 import uuid
 
-def conectar_sheets():
+def conectar_supabase() -> Client:
+    """Establece la conexión directa con el cliente de Supabase"""
     try:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        gc = gspread.service_account_from_dict(creds_dict)
-        return gc.open("Base_Desayunos") 
+        url: str = st.secrets["supabase"]["url"]
+        key: str = st.secrets["supabase"]["key"]
+        return create_client(url, key)
     except Exception as e:
-        st.error(f"Error conectando a Google Sheets. Detalle técnico: {e}")
+        st.error(f"Error de conexión con Supabase: {e}")
         st.stop()
 
 def get_productos():
-    sh = conectar_sheets()
-    ws = sh.worksheet("productos")
-    data = ws.get_all_records()
-    if not data:
+    supabase = conectar_supabase()
+    res = supabase.table("productos").select("*").execute()
+    if not res.data:
         return pd.DataFrame(columns=["id", "nombre", "precio_normal", "precio_xl"])
-    return pd.DataFrame(data)
+    return pd.DataFrame(res.data)
 
 def get_pedidos(fecha_str=None):
-    sh = conectar_sheets()
-    ws = sh.worksheet("pedidos")
-    data = ws.get_all_records()
-    
-    # Agregamos 'entregado' a la estructura base
-    if not data:
-        return pd.DataFrame(columns=["id", "cliente_nombre", "producto_id", "tamano", "cantidad", "fecha_entrega", "pagado", "entregado"])
-    
-    df = pd.DataFrame(data)
-    # Por si hay pedidos antiguos que no tenían esta columna
-    if 'entregado' not in df.columns:
-        df['entregado'] = 0
-        
+    supabase = conectar_supabase()
+    query = supabase.table("pedidos").select("*")
     if fecha_str:
-        df = df[df["fecha_entrega"] == str(fecha_str)]
-    return df
+        query = query.eq("fecha_entrega", str(fecha_str))
+    res = query.execute()
+    if not res.data:
+        return pd.DataFrame(columns=["id", "cliente_nombre", "producto_id", "tamano", "cantidad", "fecha_entrega", "pagado", "entregado"])
+    return pd.DataFrame(res.data)
 
 def agregar_pedido(cliente_nombre, producto_id, tamano, cantidad, fecha_entrega):
-    sh = conectar_sheets()
-    ws = sh.worksheet("pedidos")
+    supabase = conectar_supabase()
     nuevo_id = str(uuid.uuid4())[:8]
-    # Agregamos un segundo 0 al final para el estado de 'entregado'
-    ws.append_row([nuevo_id, cliente_nombre, str(producto_id), tamano, cantidad, str(fecha_entrega), 0, 0])
+    supabase.table("pedidos").insert({
+        "id": nuevo_id,
+        "cliente_nombre": cliente_nombre,
+        "producto_id": str(producto_id),
+        "tamano": tamano,
+        "cantidad": int(cantidad),
+        "fecha_entrega": str(fecha_entrega),
+        "pagado": False,
+        "entregado": False
+    }).execute()
 
 def actualizar_estados_lote(cambios_pagos, cambios_retiros):
-    """Actualiza la columna 7 (pagado) y la columna 8 (entregado) de golpe"""
-    if not cambios_pagos and not cambios_retiros: return
-    sh = conectar_sheets()
-    ws = sh.worksheet("pedidos")
-    records = ws.get_all_records()
-    
-    celdas_a_actualizar = []
-    for i, row in enumerate(records):
-        pid = str(row['id'])
-        if pid in cambios_pagos:
-            celdas_a_actualizar.append(gspread.Cell(row=i+2, col=7, value=int(cambios_pagos[pid])))
-        if pid in cambios_retiros:
-            celdas_a_actualizar.append(gspread.Cell(row=i+2, col=8, value=int(cambios_retiros[pid])))
-            
-    if celdas_a_actualizar:
-        ws.update_cells(celdas_a_actualizar)
+    """Actualiza filas de forma asíncrona en Supabase (toma milisegundos)"""
+    supabase = conectar_supabase()
+    for pid, valor in cambios_pagos.items():
+        supabase.table("pedidos").update({"pagado": bool(valor)}).eq("id", pid).execute()
+    for pid, valor in cambios_retiros.items():
+        supabase.table("pedidos").update({"entregado": bool(valor)}).eq("id", pid).execute()
 
 def anular_pedido(pedido_id):
-    sh = conectar_sheets()
-    ws = sh.worksheet("pedidos")
-    cell = ws.find(str(pedido_id), in_column=1)
-    if cell:
-        ws.delete_rows(cell.row)
+    supabase = conectar_supabase()
+    supabase.table("pedidos").delete().eq("id", pedido_id).execute()
 
 def agregar_producto(nombre, p_normal, p_xl):
-    sh = conectar_sheets()
-    ws = sh.worksheet("productos")
+    supabase = conectar_supabase()
     nuevo_id = str(uuid.uuid4())[:8]
-    ws.append_row([nuevo_id, nombre, p_normal if p_normal > 0 else "", p_xl if p_xl > 0 else ""])
+    supabase.table("productos").insert({
+        "id": nuevo_id,
+        "nombre": nombre,
+        "precio_normal": p_normal if p_normal > 0 else None,
+        "precio_xl": p_xl if p_xl > 0 else None
+    }).execute()
 
 def eliminar_producto(producto_id):
-    sh = conectar_sheets()
-    ws_prod = sh.worksheet("productos")
-    ws_ped = sh.worksheet("pedidos")
-    registros_pedidos = ws_ped.get_all_records()
-    tiene_historial = any(str(r.get('producto_id')) == str(producto_id) for r in registros_pedidos)
-    if tiene_historial:
+    supabase = conectar_supabase()
+    historial = supabase.table("pedidos").select("id").eq("producto_id", producto_id).limit(1).execute()
+    if historial.data:
         return False
-    else:
-        cell = ws_prod.find(str(producto_id), in_column=1)
-        if cell:
-            ws_prod.delete_rows(cell.row)
-        return True
+    supabase.table("productos").delete().eq("id", producto_id).execute()
+    return True
 
 def get_estado_sistema():
     try:
-        sh = conectar_sheets()
-        ws = sh.worksheet("config")
-        return ws.cell(2, 2).value 
+        supabase = conectar_supabase()
+        res = supabase.table("config").select("valor").eq("clave", "estado_pedidos").single().execute()
+        return res.data["valor"]
     except:
-        try:
-            sh = conectar_sheets()
-            ws = sh.add_worksheet(title="config", rows="10", cols="2")
-            ws.append_row(["clave", "valor"])
-            ws.append_row(["estado_pedidos", "Abierto"])
-            return "Abierto"
-        except:
-            return "Abierto"
+        return "Abierto"
 
 def guardar_estado_sistema(nuevo_estado):
-    sh = conectar_sheets()
-    ws = sh.worksheet("config")
-    ws.update_cell(2, 2, nuevo_estado)
+    supabase = conectar_supabase()
+    supabase.table("config").upsert({"clave": "estado_pedidos", "valor": nuevo_estado}).execute()
